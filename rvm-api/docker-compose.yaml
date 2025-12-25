@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  rvm-api:
+    build: .
+    ports:
+      - "8001:8000"
+    volumes:
+      - ./outputs:/app/outputs
+    environment:
+      - RVM_PATH=/app/RobustVideoMatting
+      - OUTPUT_DIR=/app/outputs
+      - MODEL_TYPE=mobilenetv3
+      - DOWNSAMPLE_RATIO=0.25
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+

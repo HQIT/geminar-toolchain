@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  echomimic-api:
+    build:
+      context: .
+      args:
+        BASE_IMAGE: nvidia/cuda:12.1-runtime-ubuntu22.04
+    ports:
+      - "8000:8000"
+    volumes:
+      # 模型权重（持久化，避免重复下载）
+      - echomimic_models:/app/echomimic_v3/models
+      # 输出目录（共享到宿主机）
+      - ./outputs:/app/outputs
+    environment:
+      - ECHOMIMIC_PATH=/app/echomimic_v3
+      - OUTPUT_DIR=/app/outputs
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  echomimic_models:
+
