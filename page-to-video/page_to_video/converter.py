@@ -6,10 +6,38 @@ import os
 import subprocess
 import tempfile
 import logging
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
+
+
+def parse_intro_outro(value: str) -> Tuple[float, float]:
+    """
+    解析 intro/outro 参数。
+    
+    格式: "duration" 或 "duration:fade"
+    例如: "2" -> (2.0, 0.0), "2:0.5" -> (2.0, 0.5)
+    """
+    if not value:
+        return (0.0, 0.0)
+    
+    parts = value.split(":")
+    duration = float(parts[0])
+    fade = float(parts[1]) if len(parts) > 1 else 0.0
+    return (duration, fade)
+
+
+def get_audio_duration(audio_path: str) -> float:
+    """获取音频时长（秒）"""
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    return float(result.stdout.strip())
 
 
 @dataclass
@@ -30,6 +58,8 @@ def convert(
     video_codec: str = "libx264",
     audio_codec: str = "aac",
     crf: int = 23,
+    intro: str = "",
+    outro: str = "",
 ) -> ConvertResult:
     """
     将图片和音频合成为视频。
@@ -44,6 +74,8 @@ def convert(
         video_codec: 视频编码器
         audio_codec: 音频编码器
         crf: 视频质量（越小质量越高，18-28 常用）
+        intro: 开头静音设置，格式 "duration:fade"，如 "2:0.5"
+        outro: 结尾静音设置，格式 "duration:fade"，如 "2:0.5"
         
     Returns:
         ConvertResult
@@ -59,6 +91,37 @@ def convert(
         fd, output = tempfile.mkstemp(suffix=".mp4")
         os.close(fd)
     
+    # 解析 intro/outro 参数
+    intro_duration, intro_fade = parse_intro_outro(intro)
+    outro_duration, outro_fade = parse_intro_outro(outro)
+    
+    # 构建音频滤镜
+    audio_filters = []
+    
+    # 获取音频时长用于计算 fade out 位置
+    audio_duration = get_audio_duration(audio)
+    
+    # 添加开头静音（使用 adelay）
+    if intro_duration > 0:
+        delay_ms = int(intro_duration * 1000)
+        audio_filters.append(f"adelay={delay_ms}|{delay_ms}")
+    
+    # 添加渐强效果
+    if intro_fade > 0:
+        audio_filters.append(f"afade=t=in:st={intro_duration}:d={intro_fade}")
+    
+    # 添加渐弱效果
+    if outro_fade > 0:
+        fade_out_start = intro_duration + audio_duration - outro_fade
+        audio_filters.append(f"afade=t=out:st={fade_out_start}:d={outro_fade}")
+    
+    # 添加结尾静音（使用 apad）
+    if outro_duration > 0:
+        audio_filters.append(f"apad=pad_dur={outro_duration}")
+    
+    # 计算总时长
+    total_duration = intro_duration + audio_duration + outro_duration
+    
     # 构建 ffmpeg 命令
     cmd = [
         "ffmpeg",
@@ -71,10 +134,15 @@ def convert(
         "-c:a", audio_codec,
         "-crf", str(crf),
         "-r", str(fps),
-        "-shortest",  # 以最短的流为准（音频）
+        "-t", str(total_duration),  # 指定总时长
         "-pix_fmt", "yuv420p",  # 兼容性
-        output,
     ]
+    
+    # 添加音频滤镜
+    if audio_filters:
+        cmd.extend(["-af", ",".join(audio_filters)])
+    
+    cmd.append(output)
     
     logger.info(f"Running: {' '.join(cmd)}")
     

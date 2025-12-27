@@ -22,6 +22,8 @@ def main():
     parser.add_argument("--height", type=int, default=1080, help="视频高度 (默认: 1080)")
     parser.add_argument("--fps", type=int, default=25, help="帧率 (默认: 25)")
     parser.add_argument("--crf", type=int, default=23, help="视频质量 (默认: 23，越小越好)")
+    parser.add_argument("--intro", default="", help="开头静音，格式: 时长:渐强，如 2:0.5")
+    parser.add_argument("--outro", default="", help="结尾静音，格式: 时长:渐弱，如 2:0.5")
     parser.add_argument("-v", "--verbose", action="store_true", help="详细输出")
     parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
     
@@ -42,6 +44,8 @@ def main():
         height=args.height,
         fps=args.fps,
         crf=args.crf,
+        intro=args.intro,
+        outro=args.outro,
     )
     
     if result.success:
