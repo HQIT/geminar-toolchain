@@ -1,5 +1,5 @@
 """
-配置管理
+配置管理 - EchoMimic V2
 """
 
 import os
@@ -14,26 +14,31 @@ class APIConfig:
     port: int = 8000
     output_dir: str = "outputs"
     
-    # echomimic_v3 路径（可通过环境变量配置）
+    # echomimic_v2 路径
     echomimic_path: str = field(
-        default_factory=lambda: os.getenv("ECHOMIMIC_PATH", "/app/echomimic_v3")
+        default_factory=lambda: os.getenv("ECHOMIMIC_PATH", "./echomimic_v2")
+    )
+    
+    # 预训练权重路径
+    pretrained_weights: str = field(
+        default_factory=lambda: os.getenv("PRETRAINED_WEIGHTS", "./echomimic_v2/pretrained_weights")
     )
 
 
 @dataclass  
 class InferenceConfig:
     """推理参数配置"""
+    width: int = 768
+    height: int = 768
+    length: int = 120  # 视频帧数
+    steps: int = 30
+    cfg: float = 2.5
+    fps: int = 24
+    sample_rate: int = 16000
+    context_frames: int = 12
+    context_overlap: int = 3
     seed: int = -1  # -1 表示随机
-    prompt: str = ""
-    negative_prompt: str = (
-        "Gesture is bad. Gesture is unclear. Strange and twisted hands. "
-        "Bad hands. Bad fingers. Unclear and blurry hands. "
-        "手部快速摆动, 手指频繁抽搐, 夸张手势, 重复机械性动作."
-    )
-    
-    # 可扩展的额外参数
-    width: Optional[int] = None
-    height: Optional[int] = None
+    quantization: bool = False  # int8 量化（低显存时开启）
 
 
 def get_api_config() -> APIConfig:
@@ -42,6 +47,11 @@ def get_api_config() -> APIConfig:
         host=os.getenv("API_HOST", "0.0.0.0"),
         port=int(os.getenv("API_PORT", "8000")),
         output_dir=os.getenv("OUTPUT_DIR", "outputs"),
-        echomimic_path=os.getenv("ECHOMIMIC_PATH", "/app/echomimic_v3"),
+        echomimic_path=os.getenv("ECHOMIMIC_PATH", "./echomimic_v2"),
+        pretrained_weights=os.getenv("PRETRAINED_WEIGHTS", "./echomimic_v2/pretrained_weights"),
     )
 
+
+def get_inference_config() -> InferenceConfig:
+    """获取推理配置"""
+    return InferenceConfig()

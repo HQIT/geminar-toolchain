@@ -2,31 +2,40 @@ version: '3.8'
 
 services:
   echomimic-api:
+    image: echomimic-api:v1.0.0
     build:
       context: .
       args:
-        BASE_IMAGE: nvidia/cuda:12.1-runtime-ubuntu22.04
+        BASE_IMAGE: docker.1ms.run/nvidia/cuda:12.6.2-runtime-ubuntu22.04
     ports:
-      - "8000:8000"
+      - "18030:8000"
     volumes:
-      # 模型权重（持久化，避免重复下载）
-      - echomimic_models:/app/echomimic_v3/models
-      # 输出目录（共享到宿主机）
-      - ./outputs:/app/outputs
+      # 预训练权重（挂载，不复制到镜像）
+      - ./pretrained_weights:/app/echomimic_v2/pretrained_weights
+      # 共享目录（输入输出都在这里）
+      - /home/oneapi/workspace/geminar-toolchain/shared:/app/shared
     environment:
-      - ECHOMIMIC_PATH=/app/echomimic_v3
-      - OUTPUT_DIR=/app/outputs
+      - ECHOMIMIC_PATH=/app/echomimic_v2
+      - PRETRAINED_WEIGHTS=/app/echomimic_v2/pretrained_weights
+      - SHARED_DIR=/app/shared
       - API_HOST=0.0.0.0
       - API_PORT=8000
+      - CUDA_VISIBLE_DEVICES=1  # 使用 GPU 1
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: all
               capabilities: [gpu]
     restart: unless-stopped
+    networks:
+      - echomimic-net
 
-volumes:
-  echomimic_models:
+networks:
+  echomimic-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.100.0/24
 

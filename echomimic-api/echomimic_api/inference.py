@@ -1,42 +1,41 @@
 """
-推理逻辑封装 - 调用 echomimic_v3 但不修改其源码
+推理逻辑封装 - EchoMimic V2
 """
 
 import os
 import sys
+import gc
+import random
 import logging
 import tempfile
 import requests
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlparse
-from typing import Optional, Tuple, Any
+from typing import Optional, Tuple
+
+import numpy as np
+import torch
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
-# 全局上下文，存储已加载的模型
+# 全局上下文
 _ctx: dict = {}
 _initialized: bool = False
 
 
-def _add_echomimic_to_path(echomimic_path: str):
-    """将 echomimic_v3 添加到 Python 路径"""
+def _add_to_path(echomimic_path: str):
+    """将 echomimic_v2 添加到 Python 路径"""
     if echomimic_path not in sys.path:
         sys.path.insert(0, echomimic_path)
-        logger.info(f"Added echomimic_v3 to path: {echomimic_path}")
+        logger.info(f"Added echomimic_v2 to path: {echomimic_path}")
 
 
 def download_file(url: str) -> Optional[str]:
-    """
-    下载文件到临时目录，支持本地文件路径和 HTTP URL
-    
-    Args:
-        url: 文件 URL 或本地路径
-        
-    Returns:
-        本地文件路径，失败返回 None
-    """
+    """下载文件，支持本地路径和 HTTP URL"""
     parsed = urlparse(url)
     
-    # 本地文件
     if parsed.scheme == "" or parsed.scheme == "file":
         local_path = parsed.path if parsed.scheme == "file" else url
         if os.path.exists(local_path):
@@ -44,28 +43,21 @@ def download_file(url: str) -> Optional[str]:
         logger.error(f"Local file not found: {local_path}")
         return None
     
-    # HTTP/HTTPS 下载
     try:
         response = requests.get(url, timeout=60)
         response.raise_for_status()
-        
-        # 从 URL 推断扩展名
         ext = os.path.splitext(parsed.path)[1] or ".tmp"
-        
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as f:
             f.write(response.content)
             return f.name
-            
     except Exception as e:
         logger.error(f"Failed to download {url}: {e}")
         return None
 
 
-def initialize(echomimic_path: str):
+def initialize(echomimic_path: str, pretrained_weights: str):
     """
-    初始化 echomimic_v3 模型
-    
-    这个函数在服务启动时调用，加载模型到 GPU
+    初始化 EchoMimic V2 模型
     """
     global _initialized, _ctx
     
@@ -73,25 +65,125 @@ def initialize(echomimic_path: str):
         logger.info("Already initialized")
         return
     
-    _add_echomimic_to_path(echomimic_path)
+    _add_to_path(echomimic_path)
     
-    # 切换到 echomimic_v3 目录（某些相对路径依赖）
+    # 切换工作目录
     original_cwd = os.getcwd()
     os.chdir(echomimic_path)
     
     try:
-        # 导入 echomimic_v3 的 app 模块，触发模型加载
-        # 注意：这会加载全局的 pipeline, wav2vec 等
-        logger.info("Loading echomimic_v3 models...")
+        logger.info("Loading EchoMimic V2 models...")
         
-        import app as echomimic_app
+        # 导入依赖
+        from diffusers import AutoencoderKL, DDIMScheduler
+        from src.models.unet_2d_condition import UNet2DConditionModel
+        from src.models.unet_3d_emo import EMOUNet3DConditionModel
+        from src.models.whisper.audio2feature import load_audio_model
+        from src.pipelines.pipeline_echomimicv2 import EchoMimicV2Pipeline
+        from src.models.pose_encoder import PoseEncoder
         
-        # 保存引用到上下文
-        _ctx["echomimic_app"] = echomimic_app
-        _ctx["generate_fn"] = echomimic_app.generate
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.float16
+        
+        logger.info(f"Device: {device}, dtype: {dtype}")
+        
+        # VAE
+        vae = AutoencoderKL.from_pretrained(
+            os.path.join(pretrained_weights, "sd-vae-ft-mse"),
+            local_files_only=True
+        ).to(device, dtype=dtype)
+        
+        # Reference UNet
+        reference_unet = UNet2DConditionModel.from_pretrained(
+            os.path.join(pretrained_weights, "sd-image-variations-diffusers"),
+            subfolder="unet",
+            use_safetensors=False,
+            local_files_only=True
+        ).to(dtype=dtype, device=device)
+        reference_unet.load_state_dict(
+            torch.load(os.path.join(pretrained_weights, "reference_unet.pth"), weights_only=True)
+        )
+        
+        # Denoising UNet
+        motion_module_path = os.path.join(pretrained_weights, "motion_module.pth")
+        if not os.path.exists(motion_module_path):
+            raise FileNotFoundError(f"motion_module.pth not found: {motion_module_path}")
+        
+        denoising_unet = EMOUNet3DConditionModel.from_pretrained_2d(
+            os.path.join(pretrained_weights, "sd-image-variations-diffusers"),
+            motion_module_path,
+            subfolder="unet",
+            unet_additional_kwargs={
+                "use_inflated_groupnorm": True,
+                "unet_use_cross_frame_attention": False,
+                "unet_use_temporal_attention": False,
+                "use_motion_module": True,
+                "cross_attention_dim": 384,
+                "motion_module_resolutions": [1, 2, 4, 8],
+                "motion_module_mid_block": True,
+                "motion_module_decoder_only": False,
+                "motion_module_type": "Vanilla",
+                "motion_module_kwargs": {
+                    "num_attention_heads": 8,
+                    "num_transformer_block": 1,
+                    "attention_block_types": ["Temporal_Self", "Temporal_Self"],
+                    "temporal_position_encoding": True,
+                    "temporal_position_encoding_max_len": 32,
+                    "temporal_attention_dim_div": 1,
+                }
+            },
+        ).to(dtype=dtype, device=device)
+        denoising_unet.load_state_dict(
+            torch.load(os.path.join(pretrained_weights, "denoising_unet.pth"), weights_only=True),
+            strict=False
+        )
+        
+        # Pose Encoder
+        pose_net = PoseEncoder(320, conditioning_channels=3, block_out_channels=(16, 32, 96, 256)).to(
+            dtype=dtype, device=device
+        )
+        pose_net.load_state_dict(
+            torch.load(os.path.join(pretrained_weights, "pose_encoder.pth"), weights_only=True)
+        )
+        
+        # Audio Processor
+        audio_processor = load_audio_model(
+            model_path=os.path.join(pretrained_weights, "audio_processor/tiny.pt"),
+            device=device
+        )
+        
+        # Scheduler
+        sched_kwargs = {
+            "beta_start": 0.00085,
+            "beta_end": 0.012,
+            "beta_schedule": "linear",
+            "clip_sample": False,
+            "steps_offset": 1,
+            "prediction_type": "v_prediction",
+            "rescale_betas_zero_snr": True,
+            "timestep_spacing": "trailing"
+        }
+        scheduler = DDIMScheduler(**sched_kwargs)
+        
+        # Pipeline
+        pipe = EchoMimicV2Pipeline(
+            vae=vae,
+            reference_unet=reference_unet,
+            denoising_unet=denoising_unet,
+            audio_guider=audio_processor,
+            pose_encoder=pose_net,
+            scheduler=scheduler,
+        )
+        pipe = pipe.to(device, dtype=dtype)
+        
+        # 保存到上下文
+        _ctx["pipe"] = pipe
+        _ctx["device"] = device
+        _ctx["dtype"] = dtype
+        _ctx["echomimic_path"] = echomimic_path
         
         _initialized = True
-        logger.info("echomimic_v3 initialized successfully")
+        logger.info("EchoMimic V2 initialized successfully")
         
     finally:
         os.chdir(original_cwd)
@@ -100,19 +192,35 @@ def initialize(echomimic_path: str):
 def generate(
     image_path: str,
     audio_path: str,
-    prompt: str = "",
-    negative_prompt: str = "",
+    pose_dir: str,
+    width: int = 768,
+    height: int = 768,
+    length: int = 120,
+    steps: int = 30,
+    cfg: float = 2.5,
+    fps: int = 24,
+    sample_rate: int = 16000,
+    context_frames: int = 12,
+    context_overlap: int = 3,
     seed: int = -1,
 ) -> Tuple[bool, str, Optional[str]]:
     """
     生成数字人视频
     
     Args:
-        image_path: 肖像图片路径
+        image_path: 参考图片路径
         audio_path: 音频文件路径
-        prompt: 正向提示词
-        negative_prompt: 负向提示词
-        seed: 随机种子，-1 表示随机
+        pose_dir: 姿态数据目录（包含 0.npy, 1.npy, ...）
+        width: 视频宽度
+        height: 视频高度
+        length: 视频帧数
+        steps: 推理步数
+        cfg: CFG scale
+        fps: 帧率
+        sample_rate: 音频采样率
+        context_frames: 上下文帧数
+        context_overlap: 上下文重叠
+        seed: 随机种子
         
     Returns:
         (success, output_path, error_message)
@@ -120,24 +228,126 @@ def generate(
     if not _initialized:
         return False, "", "Service not initialized"
     
-    generate_fn = _ctx.get("generate_fn")
-    if not generate_fn:
-        return False, "", "Generate function not found"
+    pipe = _ctx.get("pipe")
+    device = _ctx.get("device")
+    dtype = _ctx.get("dtype")
+    echomimic_path = _ctx.get("echomimic_path")
+    
+    if not pipe:
+        return False, "", "Pipeline not found"
+    
+    # 切换工作目录
+    original_cwd = os.getcwd()
+    os.chdir(echomimic_path)
     
     try:
-        # 调用 echomimic_v3 的 generate 函数
-        output_path, used_seed = generate_fn(
-            image=image_path,
-            audio=audio_path,
-            prompt=prompt,
-            negative_prompt=negative_prompt,
-            seed_param=seed,
+        # 导入工具函数
+        from src.utils.util import save_videos_grid
+        from src.utils.dwpose_util import draw_pose_select_v2
+        from moviepy.editor import VideoFileClip, AudioFileClip
+        
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        # 准备输出目录（使用环境变量配置）
+        shared_dir = os.getenv("SHARED_DIR", "/app/shared")
+        output_dir = os.path.join(shared_dir, "outputs")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = Path(output_dir)
+        save_dir.mkdir(exist_ok=True, parents=True)
+        save_name = f"{save_dir}/{timestamp}"
+        
+        # 设置随机种子
+        if seed is not None and seed > -1:
+            generator = torch.manual_seed(seed)
+        else:
+            seed = random.randint(100, 1000000)
+            generator = torch.manual_seed(seed)
+        
+        # 加载参考图片
+        ref_image_pil = Image.open(image_path).resize((width, height))
+        
+        # 加载音频
+        audio_clip = AudioFileClip(audio_path)
+        
+        # 计算实际帧数
+        pose_files = [f for f in os.listdir(pose_dir) if f.endswith('.npy')]
+        actual_length = min(length, int(audio_clip.duration * fps), len(pose_files))
+        
+        if actual_length <= 0:
+            return False, "", "No valid frames to generate"
+        
+        # 加载姿态数据
+        pose_list = []
+        for index in range(actual_length):
+            tgt_musk = np.zeros((width, height, 3)).astype('uint8')
+            tgt_musk_path = os.path.join(pose_dir, f"{index}.npy")
+            
+            if not os.path.exists(tgt_musk_path):
+                return False, "", f"Pose file not found: {tgt_musk_path}"
+            
+            detected_pose = np.load(tgt_musk_path, allow_pickle=True).tolist()
+            imh_new, imw_new, rb, re, cb, ce = detected_pose['draw_pose_params']
+            im = draw_pose_select_v2(detected_pose, imh_new, imw_new, ref_w=800)
+            im = np.transpose(np.array(im), (1, 2, 0))
+            tgt_musk[rb:re, cb:ce, :] = im
+            
+            tgt_musk_pil = Image.fromarray(np.array(tgt_musk)).convert('RGB')
+            pose_list.append(
+                torch.Tensor(np.array(tgt_musk_pil)).to(dtype=dtype, device=device).permute(2, 0, 1) / 255.0
+            )
+        
+        poses_tensor = torch.stack(pose_list, dim=1).unsqueeze(0)
+        
+        # 调整音频长度
+        audio_clip = audio_clip.set_duration(actual_length / fps)
+        
+        # 生成视频
+        video = pipe(
+            ref_image_pil,
+            audio_path,
+            poses_tensor[:, :, :actual_length, ...],
+            width,
+            height,
+            actual_length,
+            steps,
+            cfg,
+            generator=generator,
+            audio_sample_rate=sample_rate,
+            context_frames=context_frames,
+            fps=fps,
+            context_overlap=context_overlap,
+            start_idx=0,
+        ).videos
+        
+        final_length = min(video.shape[2], poses_tensor.shape[2], actual_length)
+        video_sig = video[:, :, :final_length, :, :]
+        
+        # 保存视频（无音频）
+        save_videos_grid(
+            video_sig,
+            save_name + "_woa.mp4",
+            n_rows=1,
+            fps=fps,
         )
         
-        logger.info(f"Generated video: {output_path}, seed: {used_seed}")
+        # 添加音频
+        video_clip_sig = VideoFileClip(save_name + "_woa.mp4")
+        video_clip_sig = video_clip_sig.set_audio(audio_clip)
+        output_path = save_name + ".mp4"
+        video_clip_sig.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=2)
+        
+        # 清理临时文件
+        os.remove(save_name + "_woa.mp4")
+        
+        logger.info(f"Generated video: {output_path}, seed: {seed}")
         return True, output_path, None
         
     except Exception as e:
         logger.exception("Generation failed")
         return False, "", str(e)
-
+    
+    finally:
+        os.chdir(original_cwd)
+        gc.collect()
+        torch.cuda.empty_cache()

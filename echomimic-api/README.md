@@ -1,12 +1,6 @@
 # EchoMimic API
 
-非侵入式 [echomimic_v3](https://github.com/antgroup/echomimic_v3) API wrapper。
-
-## 设计原则
-
-- **零侵入**：不修改 echomimic_v3 源码
-- **独立部署**：作为独立服务运行
-- **接口兼容**：兼容现有 `portrait-to-talking` 的 `EchoMimicProvider`
+EchoMimic V2 API wrapper。
 
 ## 快速开始
 
@@ -19,16 +13,14 @@ docker-compose up -d
 ### 本地开发
 
 ```bash
-# 1. 克隆 echomimic_v3
-git clone https://github.com/antgroup/echomimic_v3.git /path/to/echomimic_v3
+# 1. 设置环境变量
+export ECHOMIMIC_PATH=./echomimic_v2
+export PRETRAINED_WEIGHTS=./echomimic_v2/pretrained_weights
 
-# 2. 设置环境变量
-export ECHOMIMIC_PATH=/path/to/echomimic_v3
-
-# 3. 安装依赖
+# 2. 安装依赖
 pip install -r requirements.txt
 
-# 4. 启动服务
+# 3. 启动服务
 python -m uvicorn echomimic_api.app:app --host 0.0.0.0 --port 8000
 ```
 
@@ -74,7 +66,8 @@ python -m uvicorn echomimic_api.app:app --host 0.0.0.0 --port 8000
 
 | 环境变量 | 说明 | 默认值 |
 |---------|------|--------|
-| `ECHOMIMIC_PATH` | echomimic_v3 目录路径 | `/app/echomimic_v3` |
+| `ECHOMIMIC_PATH` | echomimic_v2 目录路径 | `./echomimic_v2` |
+| `PRETRAINED_WEIGHTS` | 预训练权重路径 | `./echomimic_v2/pretrained_weights` |
 | `OUTPUT_DIR` | 输出目录 | `outputs` |
 | `API_HOST` | 监听地址 | `0.0.0.0` |
 | `API_PORT` | 监听端口 | `8000` |
@@ -93,11 +86,37 @@ export ECHOMIMIC_URL=http://localhost:8000/a2v
 
 ```
 ┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│ portrait-to-   │     │  echomimic-api   │     │  echomimic_v3   │
-│    talking      │────▶│  (FastAPI)       │────▶│  (原始项目)      │
-│ EchoMimicProvider│    │  非侵入式 wrapper │     │  零修改          │
+│ portrait-to-   │     │  echomimic-api   │     │  echomimic_v2   │
+│    talking      │────▶│  (FastAPI)       │────▶│  (本地目录)      │
+│ EchoMimicProvider│    │                  │     │                 │
 └─────────────────┘     └──────────────────┘     └─────────────────┘
 ```
+
+## 预训练权重
+
+权重文件不纳入 git 管理，需手动下载放置到 `pretrained_weights/` 目录。
+
+### 文件清单
+
+| 文件路径 | 大小 |
+|---------|------|
+| `sd-image-variations-diffusers/unet/diffusion_pytorch_model.bin` | 3.3G |
+| `denoising_unet_acc.pth` | 3.2G |
+| `motion_module_acc.pth` | 1.7G |
+| `reference_unet.pth` | 1.6G |
+| `pose_encoder.pth` | 1.6G |
+| `denoising_unet.pth` | 1.6G |
+| `sd-image-variations-diffusers/safety_checker/pytorch_model.bin` | 1.2G |
+| `sd-image-variations-diffusers/image_encoder/pytorch_model.bin` | 1.2G |
+| `motion_module.pth` | 867M |
+| `sd-vae-ft-mse/diffusion_pytorch_model.safetensors` | 320M |
+| `sd-vae-ft-mse/diffusion_pytorch_model.bin` | 320M |
+| `sd-image-variations-diffusers/vae/diffusion_pytorch_model.bin` | 320M |
+| `audio_processor/tiny.pt` | 73M |
+
+### 下载方式
+
+从 HuggingFace 或模型源下载后放置到 `pretrained_weights/` 目录。
 
 ## License
 
