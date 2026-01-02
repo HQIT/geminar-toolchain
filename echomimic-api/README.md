@@ -68,9 +68,15 @@ python -m uvicorn echomimic_api.app:app --host 0.0.0.0 --port 8000
 |---------|------|--------|
 | `ECHOMIMIC_PATH` | echomimic_v2 目录路径 | `./echomimic_v2` |
 | `PRETRAINED_WEIGHTS` | 预训练权重路径 | `./echomimic_v2/pretrained_weights` |
-| `OUTPUT_DIR` | 输出目录 | `outputs` |
+| `SHARED_DIR` | 共享目录（输入输出） | `/app/shared` |
 | `API_HOST` | 监听地址 | `0.0.0.0` |
 | `API_PORT` | 监听端口 | `8000` |
+| `ECHOMIMIC_ACC_MODE` | 加速模式 | `false` |
+| `CUDA_VISIBLE_DEVICES` | 指定 GPU | - |
+
+### 加速模式
+
+设置 `ECHOMIMIC_ACC_MODE=true` 启用加速模式，使用 `*_acc.pth` 权重文件，推理速度更快。
 
 ## 与 portrait-to-talking 集成
 
@@ -117,6 +123,10 @@ export ECHOMIMIC_URL=http://localhost:8000/a2v
 ### 下载方式
 
 从 HuggingFace 或模型源下载后放置到 `pretrained_weights/` 目录。
+
+## TODO
+
+- [ ] 集成 EchoMimic V1（面部模型，支持只有头部的输入）
 
 ## License
 

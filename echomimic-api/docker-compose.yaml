@@ -21,6 +21,7 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - CUDA_VISIBLE_DEVICES=1  # 使用 GPU 1
+      - ECHOMIMIC_ACC_MODE=true  # 加速模式（true/false）
     deploy:
       resources:
         reservations:

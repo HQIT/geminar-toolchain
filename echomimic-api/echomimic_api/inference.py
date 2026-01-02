@@ -55,15 +55,24 @@ def download_file(url: str) -> Optional[str]:
         return None
 
 
-def initialize(echomimic_path: str, pretrained_weights: str):
+def initialize(echomimic_path: str, pretrained_weights: str, acc_mode: bool = None):
     """
     初始化 EchoMimic V2 模型
+    
+    Args:
+        echomimic_path: EchoMimic V2 目录路径
+        pretrained_weights: 预训练权重目录路径
+        acc_mode: 是否使用加速模式（None 时从环境变量 ECHOMIMIC_ACC_MODE 读取）
     """
     global _initialized, _ctx
     
     if _initialized:
         logger.info("Already initialized")
         return
+    
+    # 从环境变量读取 acc_mode
+    if acc_mode is None:
+        acc_mode = os.getenv("ECHOMIMIC_ACC_MODE", "false").lower() in ("true", "1", "yes")
     
     _add_to_path(echomimic_path)
     
@@ -72,15 +81,21 @@ def initialize(echomimic_path: str, pretrained_weights: str):
     os.chdir(echomimic_path)
     
     try:
-        logger.info("Loading EchoMimic V2 models...")
+        mode_str = "ACC" if acc_mode else "Normal"
+        logger.info(f"Loading EchoMimic V2 models ({mode_str} mode)...")
         
         # 导入依赖
         from diffusers import AutoencoderKL, DDIMScheduler
         from src.models.unet_2d_condition import UNet2DConditionModel
         from src.models.unet_3d_emo import EMOUNet3DConditionModel
         from src.models.whisper.audio2feature import load_audio_model
-        from src.pipelines.pipeline_echomimicv2 import EchoMimicV2Pipeline
         from src.models.pose_encoder import PoseEncoder
+        
+        # 根据模式选择 pipeline
+        if acc_mode:
+            from src.pipelines.pipeline_echomimicv2_acc import EchoMimicV2Pipeline
+        else:
+            from src.pipelines.pipeline_echomimicv2 import EchoMimicV2Pipeline
         
         device = "cuda" if torch.cuda.is_available() else "cpu"
         dtype = torch.float16
@@ -104,10 +119,18 @@ def initialize(echomimic_path: str, pretrained_weights: str):
             torch.load(os.path.join(pretrained_weights, "reference_unet.pth"), weights_only=True)
         )
         
+        # 根据模式选择模型权重
+        if acc_mode:
+            motion_module_file = "motion_module_acc.pth"
+            denoising_unet_file = "denoising_unet_acc.pth"
+        else:
+            motion_module_file = "motion_module.pth"
+            denoising_unet_file = "denoising_unet.pth"
+        
         # Denoising UNet
-        motion_module_path = os.path.join(pretrained_weights, "motion_module.pth")
+        motion_module_path = os.path.join(pretrained_weights, motion_module_file)
         if not os.path.exists(motion_module_path):
-            raise FileNotFoundError(f"motion_module.pth not found: {motion_module_path}")
+            raise FileNotFoundError(f"{motion_module_file} not found: {motion_module_path}")
         
         denoising_unet = EMOUNet3DConditionModel.from_pretrained_2d(
             os.path.join(pretrained_weights, "sd-image-variations-diffusers"),
@@ -134,7 +157,7 @@ def initialize(echomimic_path: str, pretrained_weights: str):
             },
         ).to(dtype=dtype, device=device)
         denoising_unet.load_state_dict(
-            torch.load(os.path.join(pretrained_weights, "denoising_unet.pth"), weights_only=True),
+            torch.load(os.path.join(pretrained_weights, denoising_unet_file), weights_only=True),
             strict=False
         )
         
@@ -181,9 +204,10 @@ def initialize(echomimic_path: str, pretrained_weights: str):
         _ctx["device"] = device
         _ctx["dtype"] = dtype
         _ctx["echomimic_path"] = echomimic_path
+        _ctx["acc_mode"] = acc_mode
         
         _initialized = True
-        logger.info("EchoMimic V2 initialized successfully")
+        logger.info(f"EchoMimic V2 initialized successfully ({mode_str} mode)")
         
     finally:
         os.chdir(original_cwd)
@@ -270,29 +294,37 @@ def generate(
         # 加载音频
         audio_clip = AudioFileClip(audio_path)
         
-        # 计算实际帧数
+        # 计算实际帧数（以音频长度为准）
         pose_files = [f for f in os.listdir(pose_dir) if f.endswith('.npy')]
-        actual_length = min(length, int(audio_clip.duration * fps), len(pose_files))
+        pose_count = len(pose_files)
+        actual_length = min(length, int(audio_clip.duration * fps))
         
         if actual_length <= 0:
             return False, "", "No valid frames to generate"
+        if pose_count <= 0:
+            return False, "", "No pose files found"
         
-        # 加载姿态数据
+        # 加载姿态数据（pose不够则循环）
         pose_list = []
         for index in range(actual_length):
-            tgt_musk = np.zeros((width, height, 3)).astype('uint8')
-            tgt_musk_path = os.path.join(pose_dir, f"{index}.npy")
+            pose_index = index % pose_count  # 循环使用pose
+            tgt_musk_path = os.path.join(pose_dir, f"{pose_index}.npy")
             
             if not os.path.exists(tgt_musk_path):
                 return False, "", f"Pose file not found: {tgt_musk_path}"
             
             detected_pose = np.load(tgt_musk_path, allow_pickle=True).tolist()
             imh_new, imw_new, rb, re, cb, ce = detected_pose['draw_pose_params']
+            
+            # 用pose原始尺寸生成pose图
+            pose_size = re  # pose原始尺寸（正方形）
+            tgt_musk = np.zeros((pose_size, pose_size, 3)).astype('uint8')
             im = draw_pose_select_v2(detected_pose, imh_new, imw_new, ref_w=800)
             im = np.transpose(np.array(im), (1, 2, 0))
             tgt_musk[rb:re, cb:ce, :] = im
             
-            tgt_musk_pil = Image.fromarray(np.array(tgt_musk)).convert('RGB')
+            # resize到目标尺寸
+            tgt_musk_pil = Image.fromarray(tgt_musk).convert('RGB').resize((width, height))
             pose_list.append(
                 torch.Tensor(np.array(tgt_musk_pil)).to(dtype=dtype, device=device).permute(2, 0, 1) / 255.0
             )

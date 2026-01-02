@@ -110,7 +110,7 @@ async def audio_to_video(request: GenerationRequest):
     需要提供：
     - ref_image_url: 参考图片
     - audio_url: 音频文件
-    - pose_dir: 姿态数据目录
+    - pose_dir: 姿态数据目录（容器内完整路径）
     """
     # 下载/验证图片
     image_path = download_file(request.ref_image_url)
