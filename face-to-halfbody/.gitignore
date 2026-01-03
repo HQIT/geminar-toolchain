@@ -1,0 +1,11 @@
+# 模型文件
+models/*.onnx
+models/models/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
