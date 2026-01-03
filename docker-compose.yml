@@ -1,0 +1,9 @@
+
+services:
+  toolchain:
+    build: .
+    image: geminar-toolchain
+    volumes:
+      - ./shared:/app/shared
+    environment:
+      - ECHOMIMIC_URL=${ECHOMIMIC_URL:-http://host.docker.internal:8000/a2v}
