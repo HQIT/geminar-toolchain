@@ -19,20 +19,21 @@
 
 ```mermaid
 flowchart LR
-    subgraph 素材准备
+    subgraph "素材准备"
         PPT[PPT/PPTX]
-        TEXT[解说词/备注]
+        TEXT_RAW[原始备注]
         FACE[人脸照片]
     end
 
-    subgraph 素材转换
+    subgraph "素材转换"
         PPT -->|ppt-to-images| IMAGES[图片序列]
-        PPT -->|提取备注| TEXT
-        TEXT -->|text-to-speech| AUDIO[音频]
+        PPT -->|提取备注| NOTES[备注文本]
+        NOTES -->|LLM润色| TEXT_MAT[解说词/备注]
+        TEXT_MAT -->|text-to-speech| AUDIO[音频]
         FACE -->|face-to-halfbody| HALFBODY[上半身照片]
     end
 
-    subgraph 视频生成
+    subgraph "视频生成"
         IMAGES --> PTV[page-to-video]
         AUDIO --> PTV
         AUDIO --> PTT[portrait-to-talking]
@@ -41,7 +42,7 @@ flowchart LR
         PTT --> TALKING_VIDEO[数字人视频]
     end
 
-    subgraph 合成输出
+    subgraph "合成输出"
         SLIDE_VIDEO --> CAT[clip-add-talking]
         TALKING_VIDEO -->|画中画| CAT
         CAT --> OUTPUT[成品视频]
