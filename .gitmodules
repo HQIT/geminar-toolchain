@@ -1,9 +1,15 @@
 [submodule "portrait-to-talking"]
 	path = portrait-to-talking
 	url = https://github.com/HQIT/portrait-to-talking.git
-[submodule "echomimic-api/echomimic_v3"]
-	path = echomimic-api/echomimic_v3
-	url = https://gh-proxy.org/https://github.com/antgroup/echomimic_v3.git
 [submodule "echomimic-api/echomimic_v2"]
 	path = echomimic-api/echomimic_v2
 	url = https://gh-proxy.com/https://github.com/antgroup/echomimic_v2.git
+[submodule "ppt-to-images"]
+	path = ppt-to-images
+	url = https://github.com/HQIT/ppt-to-images.git
+[submodule "text-to-speech"]
+	path = text-to-speech
+	url = https://github.com/HQIT/text-to-speech.git
+[submodule "clip-add-talking"]
+	path = clip-add-talking
+	url = https://github.com/HQIT/clip-add-talking.git
